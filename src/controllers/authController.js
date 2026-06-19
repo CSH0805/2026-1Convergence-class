@@ -45,12 +45,20 @@ exports.googleLogin = async (req, res) => {
     return res.status(400).json({ error: 'idToken이 필요합니다.' });
   }
 
+  // 1단계: 토큰 검증
+  let payload;
   try {
     const isDev = process.env.NODE_ENV === 'development';
-    const payload = isDev
+    payload = isDev
       ? await verifyGoogleTokenDev(idToken).catch(() => verifyGoogleToken(idToken))
       : await verifyGoogleToken(idToken);
+  } catch (err) {
+    console.error('[토큰 오류]', err.message);
+    return res.status(401).json({ error: '구글 토큰 검증에 실패했습니다.' });
+  }
 
+  // 2단계: DB 조회/저장
+  try {
     let user = await userModel.findByGoogleId(payload.sub);
     if (!user) {
       user = await userModel.createUser({
@@ -67,8 +75,8 @@ exports.googleLogin = async (req, res) => {
       user: { id: user.id, email: user.email, name: user.name },
     });
   } catch (err) {
-    console.error('Google 로그인 오류:', err.message);
-    return res.status(401).json({ error: '구글 토큰 검증에 실패했습니다.' });
+    console.error('[DB 오류]', err.message);
+    return res.status(500).json({ error: 'DB 오류: ' + err.message });
   }
 };
 
