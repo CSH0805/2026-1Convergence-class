@@ -32,22 +32,20 @@ class _MindMapScreenState extends State<MindMapScreen> {
   final _jsonController = TextEditingController(text: _sampleJson);
   Graph? _graph;
   Map<String, String> _labelMap = {};
+  Set<String> _centerNodeIds = {};
   String? _errorMessage;
   bool _hasVirtualRoot = false;
 
   final _config = BuchheimWalkerConfiguration()
-    ..siblingSeparation = 60
-    ..levelSeparation = 90
-    ..subtreeSeparation = 60
+    ..siblingSeparation = 50
+    ..levelSeparation = 80
+    ..subtreeSeparation = 50
     ..orientation = BuchheimWalkerConfiguration.ORIENTATION_TOP_BOTTOM;
 
-  // JSON 파싱 & 그래프 빌드
+  // ── JSON 파싱 & 그래프 빌드 ──────────────────────────────────────────
   void _parseAndRender() {
     final text = _jsonController.text.trim();
-    if (text.isEmpty) {
-      _setError('JSON을 입력해주세요.');
-      return;
-    }
+    if (text.isEmpty) { _setError('JSON을 입력해주세요.'); return; }
 
     Map<String, dynamic> data;
     try {
@@ -57,14 +55,69 @@ class _MindMapScreenState extends State<MindMapScreen> {
       return;
     }
 
-    try {
-      final rawNodes = data['nodes'];
-      final rawEdges = data['edges'];
-      if (rawNodes == null) { _setError('"nodes" 키가 없습니다.'); return; }
-      if (rawEdges == null) { _setError('"edges" 키가 없습니다.'); return; }
+    // ── 입력 형식 자동 감지 ──────────────────────────────────────────
+    Map<String, dynamic> graphData;
+    final centerIds = <String>{};
 
-      final nodeList = (rawNodes as List).cast<Map<String, dynamic>>();
-      final edgeList = (rawEdges as List).cast<Map<String, dynamic>>();
+    if (data.containsKey('graph')) {
+      // 백엔드 /result 응답 (graph 필드 포함)
+      graphData = data['graph'] as Map<String, dynamic>;
+      centerIds.add('__center__');
+    } else if (data.containsKey('keywords') && data.containsKey('diagnosis')) {
+      // 백엔드 /result 응답 (구버전, graph 필드 없음) → 자동 변환
+      graphData = _convertFromBackendResult(data);
+      centerIds.add('__center__');
+    } else if (data.containsKey('nodes') && data.containsKey('edges')) {
+      // 직접 입력한 nodes/edges 형식
+      graphData = data;
+    } else {
+      _setError('"nodes"/"edges" 형식 또는 백엔드 /result JSON을 붙여넣어 주세요.');
+      return;
+    }
+
+    _buildGraphFromData(graphData, centerIds);
+  }
+
+  // 백엔드 /result 형식을 nodes/edges 로 변환
+  Map<String, dynamic> _convertFromBackendResult(Map<String, dynamic> data) {
+    const typeLabel = {'avoidant': '회피형', 'anxious': '불안형', 'secure': '안정형', 'neglected': '방치형'};
+    final diagType = (data['diagnosis'] as Map?)?.containsKey('type') == true
+        ? (data['diagnosis'] as Map)['type']?.toString() ?? ''
+        : '';
+    final centerLabel = typeLabel[diagType] ?? diagType;
+
+    final keywords = ((data['keywords'] as List?) ?? []).cast<Map<String, dynamic>>();
+    final nodeMap = <String, Map<String, String>>{};
+    final edges = <Map<String, String>>[];
+
+    nodeMap['__center__'] = {'id': '__center__', 'label': centerLabel};
+
+    for (final k in keywords) {
+      final kw = k['keyword']?.toString() ?? '';
+      final rel = k['related_keyword']?.toString();
+      if (kw.isNotEmpty && !nodeMap.containsKey(kw)) nodeMap[kw] = {'id': kw, 'label': kw};
+      if (rel != null && rel.isNotEmpty && !nodeMap.containsKey(rel)) nodeMap[rel] = {'id': rel, 'label': rel};
+      if (rel != null && rel.isNotEmpty) edges.add({'from': kw, 'to': rel});
+    }
+
+    final hasIncoming = edges.map((e) => e['to']!).toSet();
+    for (final id in nodeMap.keys) {
+      if (id != '__center__' && !hasIncoming.contains(id)) {
+        edges.add({'from': '__center__', 'to': id});
+      }
+    }
+
+    return {'nodes': nodeMap.values.toList(), 'edges': edges};
+  }
+
+  // nodes/edges 데이터 → Graph 객체 빌드
+  void _buildGraphFromData(Map<String, dynamic> graphData, Set<String> centerIds) {
+    try {
+      final nodeList = (graphData['nodes'] as List?)?.cast<Map<String, dynamic>>();
+      final edgeList = (graphData['edges'] as List?)?.cast<Map<String, dynamic>>();
+
+      if (nodeList == null) { _setError('"nodes" 키가 없습니다.'); return; }
+      if (edgeList == null) { _setError('"edges" 키가 없습니다.'); return; }
       if (nodeList.isEmpty) { _setError('nodes 배열이 비어있습니다.'); return; }
 
       final graph = Graph()..isTree = true;
@@ -83,30 +136,29 @@ class _MindMapScreenState extends State<MindMapScreen> {
       for (final e in edgeList) {
         final from = e['from']?.toString() ?? '';
         final to   = e['to']?.toString()   ?? '';
-        if (!nodeMap.containsKey(from)) { _setError('edges에 존재하지 않는 노드 참조: "$from"'); return; }
-        if (!nodeMap.containsKey(to))   { _setError('edges에 존재하지 않는 노드 참조: "$to"');   return; }
+        if (!nodeMap.containsKey(from)) { _setError('edges에 존재하지 않는 노드: "$from"'); return; }
+        if (!nodeMap.containsKey(to))   { _setError('edges에 존재하지 않는 노드: "$to"');   return; }
         graph.addEdge(nodeMap[from]!, nodeMap[to]!);
         hasIncoming.add(to);
       }
 
-      // 루트 탐색 (incoming edge 없는 노드)
+      // 루트가 여러 개면 가상 중심 노드 추가
       final roots = nodeMap.keys.where((id) => !hasIncoming.contains(id)).toList();
       bool hasVirtualRoot = false;
-
-      if (roots.length > 1) {
-        const vId = '__root__';
+      if (roots.length > 1 && !roots.any((r) => centerIds.contains(r))) {
+        const vId = '__virtual_root__';
         final vNode = Node.Id(vId);
-        labelMap[vId] = '✦ 중심';
+        labelMap[vId] = '(중심)';
+        centerIds.add(vId);
         graph.addNode(vNode);
-        for (final r in roots) {
-          graph.addEdge(vNode, nodeMap[r]!);
-        }
+        for (final r in roots) graph.addEdge(vNode, nodeMap[r]!);
         hasVirtualRoot = true;
       }
 
       setState(() {
         _graph = graph;
         _labelMap = labelMap;
+        _centerNodeIds = centerIds;
         _errorMessage = null;
         _hasVirtualRoot = hasVirtualRoot;
       });
@@ -117,29 +169,34 @@ class _MindMapScreenState extends State<MindMapScreen> {
 
   void _setError(String msg) => setState(() { _graph = null; _errorMessage = msg; });
 
-  // 노드 클릭 → AlertDialog
+  // ── 노드 클릭 → AlertDialog ───────────────────────────────────────────
   void _onNodeTap(String nodeId) {
-    if (nodeId == '__root__') return;
+    if (nodeId == '__virtual_root__') return;
     final label = _labelMap[nodeId] ?? nodeId;
+    final isCenter = _centerNodeIds.contains(nodeId);
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.circle, color: Colors.teal, size: 16),
-            SizedBox(width: 8),
-            Text('노드 상세 정보'),
+            Icon(isCenter ? Icons.psychology_outlined : Icons.circle,
+                color: isCenter ? Colors.amber.shade700 : Colors.teal, size: 18),
+            const SizedBox(width: 8),
+            Text(isCenter ? '진단 결과' : '노드 정보'),
           ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('ID', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
-            Text(nodeId, style: const TextStyle(fontSize: 13)),
-            const SizedBox(height: 12),
-            Text('라벨', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+            if (!isCenter) ...[
+              Text('ID', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+              Text(nodeId, style: const TextStyle(fontSize: 12)),
+              const SizedBox(height: 10),
+            ],
+            Text('키워드', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
             Text(label, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
           ],
         ),
@@ -150,23 +207,26 @@ class _MindMapScreenState extends State<MindMapScreen> {
     );
   }
 
-  // 노드 위젯
+  // ── 노드 위젯 ─────────────────────────────────────────────────────────
   Widget _nodeBuilder(Node node) {
     final id = node.key!.value.toString();
     final label = _labelMap[id] ?? id;
-    final isVirtual = id == '__root__';
+    final isCenter = _centerNodeIds.contains(id);
 
     return GestureDetector(
       onTap: () => _onNodeTap(id),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        padding: EdgeInsets.symmetric(
+          horizontal: isCenter ? 22 : 16,
+          vertical: isCenter ? 14 : 9,
+        ),
         decoration: BoxDecoration(
-          color: isVirtual ? Colors.grey.shade200 : Colors.teal.shade400,
-          borderRadius: BorderRadius.circular(24),
+          color: isCenter ? Colors.amber.shade600 : Colors.teal.shade400,
+          borderRadius: BorderRadius.circular(isCenter ? 30 : 22),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.15),
-              blurRadius: 6,
+              color: (isCenter ? Colors.amber : Colors.teal).withValues(alpha: 0.35),
+              blurRadius: isCenter ? 10 : 6,
               offset: const Offset(2, 3),
             ),
           ],
@@ -174,15 +234,16 @@ class _MindMapScreenState extends State<MindMapScreen> {
         child: Text(
           label,
           style: TextStyle(
-            color: isVirtual ? Colors.grey.shade600 : Colors.white,
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
+            color: Colors.white,
+            fontSize: isCenter ? 16 : 13,
+            fontWeight: isCenter ? FontWeight.bold : FontWeight.w600,
           ),
         ),
       ),
     );
   }
 
+  // ── UI ────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -199,13 +260,13 @@ class _MindMapScreenState extends State<MindMapScreen> {
               _graph = null;
               _errorMessage = null;
               _hasVirtualRoot = false;
+              _centerNodeIds = {};
             }),
           ),
         ],
       ),
       body: Column(
         children: [
-          // 입력 영역
           Container(
             color: Colors.grey.shade50,
             padding: const EdgeInsets.all(12),
@@ -217,8 +278,8 @@ class _MindMapScreenState extends State<MindMapScreen> {
                   maxLines: 6,
                   style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
                   decoration: InputDecoration(
-                    labelText: '백엔드 JSON 붙여넣기',
-                    hintText: '{"nodes": [...], "edges": [...]}',
+                    labelText: '백엔드 /result JSON 또는 nodes/edges JSON 붙여넣기',
+                    hintText: '백엔드 결과를 그대로 붙여넣어도 됩니다.',
                     border: const OutlineInputBorder(),
                     filled: true,
                     fillColor: Colors.white,
@@ -244,7 +305,7 @@ class _MindMapScreenState extends State<MindMapScreen> {
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(
-                      '⚠  루트가 여러 개라 가상 중심 노드(✦ 중심)를 자동 추가했습니다.',
+                      '⚠  루트가 여러 개라 가상 중심 노드를 자동 추가했습니다.',
                       style: TextStyle(color: Colors.orange.shade700, fontSize: 12),
                     ),
                   ),
@@ -252,7 +313,6 @@ class _MindMapScreenState extends State<MindMapScreen> {
             ),
           ),
           const Divider(height: 1),
-          // 그래프 영역
           Expanded(child: _buildGraphArea()),
         ],
       ),
@@ -269,11 +329,8 @@ class _MindMapScreenState extends State<MindMapScreen> {
             children: [
               const Icon(Icons.error_outline, color: Colors.red, size: 52),
               const SizedBox(height: 16),
-              Text(
-                _errorMessage!,
-                style: const TextStyle(color: Colors.red, fontSize: 14),
-                textAlign: TextAlign.center,
-              ),
+              Text(_errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 14),
+                  textAlign: TextAlign.center),
             ],
           ),
         ),
@@ -289,7 +346,8 @@ class _MindMapScreenState extends State<MindMapScreen> {
             SizedBox(height: 12),
             Text('JSON을 입력하고 버튼을 눌러주세요.', style: TextStyle(color: Colors.grey)),
             SizedBox(height: 4),
-            Text('노드를 클릭하면 상세 정보가 표시됩니다.', style: TextStyle(color: Colors.grey, fontSize: 12)),
+            Text('백엔드 /result 응답을 그대로 붙여넣어도 됩니다.',
+                style: TextStyle(color: Colors.grey, fontSize: 12)),
           ],
         ),
       );
@@ -307,7 +365,7 @@ class _MindMapScreenState extends State<MindMapScreen> {
           algorithm: BuchheimWalkerAlgorithm(_config, TreeEdgeRenderer(_config)),
           paint: Paint()
             ..color = Colors.teal.shade200
-            ..strokeWidth = 1.8
+            ..strokeWidth = 1.5
             ..style = PaintingStyle.stroke,
           builder: _nodeBuilder,
         ),
@@ -322,25 +380,25 @@ class _MindMapScreenState extends State<MindMapScreen> {
   }
 }
 
-// 앱 시작 시 보여줄 샘플 JSON
+// 앱 시작 시 보여줄 샘플 — 백엔드 /result 형식 그대로
 const _sampleJson = '''
 {
-  "nodes": [
-    { "id": "1", "label": "불안감" },
-    { "id": "2", "label": "학교" },
-    { "id": "3", "label": "친구관계" },
-    { "id": "4", "label": "외로움" },
-    { "id": "5", "label": "스트레스" },
-    { "id": "6", "label": "성적" },
-    { "id": "7", "label": "소통 어려움" }
-  ],
-  "edges": [
-    { "from": "1", "to": "2" },
-    { "from": "1", "to": "3" },
-    { "from": "1", "to": "4" },
-    { "from": "2", "to": "5" },
-    { "from": "2", "to": "6" },
-    { "from": "3", "to": "7" }
+  "character": "quokka",
+  "diagnosis": {
+    "type": "anxious",
+    "reasoning": "샘플 진단 근거입니다."
+  },
+  "keywords": [
+    { "keyword": "외로움", "related_keyword": null },
+    { "keyword": "관심사", "related_keyword": "소통" },
+    { "keyword": "슬픔", "related_keyword": "감정 표현" },
+    { "keyword": "소심함", "related_keyword": null },
+    { "keyword": "친구 관계", "related_keyword": "무시" },
+    { "keyword": "로블록스", "related_keyword": "게임" },
+    { "keyword": "배드민턴", "related_keyword": "스포츠" },
+    { "keyword": "담임선생님", "related_keyword": "지지" },
+    { "keyword": "조언", "related_keyword": "관심사 만들기" },
+    { "keyword": "감정 털어놓기", "related_keyword": "어려움" }
   ]
 }
 ''';
