@@ -14,7 +14,9 @@
     "google-auth-library": "^9.11.0",
     "jsonwebtoken": "^9.0.2",
     "mysql2": "^3.9.7",
-    "openai": "^6.44.0"
+    "nodemailer": "^9.0.1",
+    "openai": "^6.44.0",
+    "pdfmake": "^0.3.11"
   },
   "devDependencies": {
     "nodemon": "^3.1.3"

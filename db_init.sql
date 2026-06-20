@@ -47,7 +47,18 @@ CREATE TABLE IF NOT EXISTS diagnoses (
   FOREIGN KEY (session_id) REFERENCES counseling_sessions(id) ON DELETE CASCADE
 );
 
--- 5. 마인드맵 키워드 (노드-엣지 구조)
+-- 5. 생성된 PDF 파일 메타데이터
+CREATE TABLE IF NOT EXISTS pdfs (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  session_id INT NOT NULL,
+  user_id    INT NOT NULL,
+  file_path  VARCHAR(500) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (session_id) REFERENCES counseling_sessions(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 6. 마인드맵 키워드 (노드-엣지 구조)
 CREATE TABLE IF NOT EXISTS keywords (
   id               INT AUTO_INCREMENT PRIMARY KEY,
   session_id       INT NOT NULL,

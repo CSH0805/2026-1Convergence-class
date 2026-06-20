@@ -4,6 +4,7 @@ const cors = require('cors');
 
 const authRoutes = require('./src/routes/authRoutes');
 const counselingRoutes = require('./src/routes/counselingRoutes');
+const pdfRoutes = require('./src/routes/pdfRoutes');
 
 const app = express();
 
@@ -13,6 +14,7 @@ app.use(express.json());
 // 라우터
 app.use('/auth', authRoutes);
 app.use('/counseling', counselingRoutes);
+app.use('/', pdfRoutes);
 
 // 헬스체크
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
