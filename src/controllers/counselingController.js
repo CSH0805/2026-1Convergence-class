@@ -6,6 +6,38 @@ const counselingModel = require('../models/counselingModel');
 const VALID_CHARACTERS = ['dog', 'cat', 'quokka', 'mouse'];
 const TOTAL_QUESTIONS = 10;
 
+// keywords + 진단유형 → Flutter GraphView용 nodes/edges 구조로 변환
+function buildGraph(keywords, attachmentType) {
+  const typeLabel = { avoidant: '회피형', anxious: '불안형', secure: '안정형', neglected: '방치형' };
+  const centerLabel = typeLabel[attachmentType] || attachmentType;
+
+  const nodeMap = new Map();
+  const edges = [];
+
+  // 중심 노드 (진단 유형)
+  nodeMap.set('__center__', { id: '__center__', label: centerLabel });
+
+  for (const k of keywords) {
+    if (!nodeMap.has(k.keyword)) nodeMap.set(k.keyword, { id: k.keyword, label: k.keyword });
+    if (k.related_keyword && !nodeMap.has(k.related_keyword)) {
+      nodeMap.set(k.related_keyword, { id: k.related_keyword, label: k.related_keyword });
+    }
+    if (k.related_keyword) {
+      edges.push({ from: k.keyword, to: k.related_keyword });
+    }
+  }
+
+  // incoming edge 없는 키워드는 중심 노드에 연결
+  const hasIncoming = new Set(edges.map(e => e.to));
+  for (const id of nodeMap.keys()) {
+    if (id !== '__center__' && !hasIncoming.has(id)) {
+      edges.push({ from: '__center__', to: id });
+    }
+  }
+
+  return { nodes: Array.from(nodeMap.values()), edges };
+}
+
 // 대화 DB 레코드 → OpenAI messages 배열로 변환
 function buildChatHistory(messages) {
   const history = [];
@@ -119,6 +151,8 @@ exports.getResult = async (req, res) => {
     if (session.user_id !== req.user.id) return res.status(403).json({ error: '권한이 없습니다.' });
     if (session.status !== 'completed') return res.status(400).json({ error: '아직 완료되지 않은 세션입니다.' });
 
+    const graph = buildGraph(keywords, diagnosis.attachment_type);
+
     return res.json({
       character: session.character,
       diagnosis: {
@@ -126,6 +160,7 @@ exports.getResult = async (req, res) => {
         reasoning: diagnosis.reasoning,
       },
       keywords,
+      graph,
       conversation: messages,
     });
   } catch (err) {
