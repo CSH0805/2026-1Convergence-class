@@ -4,19 +4,6 @@ const userModel = require('../models/userModel');
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-// 개발 모드 전용: 실제 구글 토큰 검증 없이 테스트 유저 반환
-async function verifyGoogleTokenDev(idToken) {
-  if (idToken === 'dev-test-token') {
-    return {
-      sub: 'dev_google_id_12345',
-      email: 'dev@test.com',
-      name: '개발자테스트',
-      picture: null,
-    };
-  }
-  throw new Error('개발 모드에서는 "dev-test-token"만 허용됩니다.');
-}
-
 async function verifyGoogleToken(idToken) {
   const ticket = await googleClient.verifyIdToken({
     idToken,
@@ -48,10 +35,7 @@ exports.googleLogin = async (req, res) => {
   // 1단계: 토큰 검증
   let payload;
   try {
-    const isDev = process.env.NODE_ENV === 'development';
-    payload = isDev
-      ? await verifyGoogleTokenDev(idToken).catch(() => verifyGoogleToken(idToken))
-      : await verifyGoogleToken(idToken);
+    payload = await verifyGoogleToken(idToken);
   } catch (err) {
     console.error('[토큰 오류]', err.message);
     return res.status(401).json({ error: '구글 토큰 검증에 실패했습니다.' });

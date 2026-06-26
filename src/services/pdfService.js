@@ -1,4 +1,4 @@
-const PdfPrinter = require('pdfmake');
+const PdfPrinter = require('pdfmake/src/printer');
 const path = require('path');
 const fs = require('fs');
 

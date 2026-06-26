@@ -16,7 +16,7 @@
     "mysql2": "^3.9.7",
     "nodemailer": "^9.0.1",
     "openai": "^6.44.0",
-    "pdfmake": "^0.3.11"
+    "pdfmake": "^0.2.10"
   },
   "devDependencies": {
     "nodemon": "^3.1.3"

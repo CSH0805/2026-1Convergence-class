@@ -6,6 +6,10 @@
 # 의존성
 node_modules/
 
+# 생성된 PDF 파일 (로컬 저장만, git 추적 제외)
+uploads/pdfs/**
+!uploads/pdfs/.gitkeep
+
 # 로그
 *.log
 npm-debug.log*
